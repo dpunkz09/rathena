@@ -1,0 +1,332 @@
+//====================================================================
+// High-Rate Pre-Renewal Multi-Dummy DPS System (rAthena)
+// - Single controller manages all dummies simultaneously via arrays
+// - Overhead unittalk DPS readout & heal effects on every dummy
+// - 500ms polling: 1-second live updates & 3-second final summary
+// - 2,000,000,000 HP healed every 0.5s (absorbs up to 4B damage/sec)
+//====================================================================
+
+prontera,162,174,0	script	DPS_Dummy_Core	844,{
+	end;
+
+OnInit:
+	.mhp = 2000000000; // 2 Billion HP (safe under 32-bit signed int max)
+
+	// --- Configure Dummy Locations Here (Index 0, 1, 2...) ---
+	setarray .map$[0], "prontera", "prontera", "prontera";
+	setarray .x[0],    162,        162,        162;
+	setarray .y[0],    180,        174,        168;
+	.count = getarraysize(.x);
+
+	for (.@i = 0; .@i < .count; .@i++) {
+		.race[.@i] = 7;       // 7 = Demi-Human
+		.ele[.@i] = 0;        // 0 = Neutral
+		.ele_lv[.@i] = 1;     // Element Level 1
+		.size[.@i] = 1;       // 1 = Medium
+		.def[.@i] = 0;        // Hard DEF
+		.mdef[.@i] = 0;       // Hard MDEF
+		.flee[.@i] = 0;       // Flee
+		.sprite[.@i] = 1905;  // 1905 = Barricade
+		.preset$[.@i] = "Standard Dummy";
+		callsub S_SpawnDummy, .@i;
+	}
+
+	initnpctimer;
+	end;
+
+S_SpawnDummy:
+	.@i = getarg(0);
+	if (unitexists(.gid[.@i])) {
+		unitkill .gid[.@i];
+	}
+	monster .map$[.@i], .x[.@i], .y[.@i], "DPS Dummy #" + (.@i + 1), 1002, 1, "DPS_Dummy_Core::OnMyMobDead";
+	.gid[.@i] = $@mobid[0];
+	callsub S_ApplyStats, .@i;
+	callsub S_ResetCombat, .@i;
+	return;
+
+S_ApplyStats:
+	.@i = getarg(0);
+	if (!unitexists(.gid[.@i])) {
+		callsub S_SpawnDummy, .@i;
+		return;
+	}
+	// MD_STATUSIMMUNE (0x4000000) | MD_KNOCKBACKIMMUNE (0x0200000)
+	setunitdata .gid[.@i], UMOB_MODE, 0x4000000 | 0x0200000;
+	setunitdata .gid[.@i], UMOB_MAXHP, .mhp;
+	setunitdata .gid[.@i], UMOB_HP, .mhp;
+	setunitdata .gid[.@i], UMOB_RACE, .race[.@i];
+	setunitdata .gid[.@i], UMOB_ELETYPE, .ele[.@i];
+	setunitdata .gid[.@i], UMOB_ELELEVEL, .ele_lv[.@i];
+	setunitdata .gid[.@i], UMOB_SIZE, .size[.@i];
+	setunitdata .gid[.@i], UMOB_DEF, .def[.@i];
+	setunitdata .gid[.@i], UMOB_MDEF, .mdef[.@i];
+	setunitdata .gid[.@i], UMOB_FLEE, .flee[.@i];
+	setunitdata .gid[.@i], UMOB_CLASS, .sprite[.@i];
+	specialeffect EF_HEAL, AREA, "DPS_FX#" + .@i;
+	return;
+
+S_ResetCombat:
+	.@i = getarg(0);
+	.in_combat[.@i] = 0;
+	.total_dmg[.@i] = 0;
+	.sec_dmg[.@i] = 0;
+	.peak_dps[.@i] = 0;
+	.combat_ms[.@i] = 0;
+	.idle_ms[.@i] = 0;
+	if (unitexists(.gid[.@i])) {
+		setunitdata .gid[.@i], UMOB_HP, .mhp;
+	}
+	return;
+
+OnTimer500:
+	for (.@i = 0; .@i < .count; .@i++) {
+		if (!unitexists(.gid[.@i])) {
+			callsub S_SpawnDummy, .@i;
+			continue;
+		}
+
+		getunitdata .gid[.@i], .@ud;
+		.@cur_hp = .@ud[UMOB_HP];
+		.@dmg = .mhp - .@cur_hp;
+
+		// Restore HP every 0.5s so high-rate builds never kill the dummy
+		if (.@dmg > 0) {
+			setunitdata .gid[.@i], UMOB_HP, .mhp;
+		}
+
+		if (.@dmg > 0) {
+			if (!.in_combat[.@i]) {
+				.in_combat[.@i] = 1;
+				.total_dmg[.@i] = 0;
+				.sec_dmg[.@i] = 0;
+				.peak_dps[.@i] = 0;
+				.combat_ms[.@i] = 0;
+				.idle_ms[.@i] = 0;
+			}
+			.idle_ms[.@i] = 0;
+			.combat_ms[.@i] += 500;
+			.total_dmg[.@i] += .@dmg;
+			.sec_dmg[.@i] += .@dmg;
+
+			// Every 1.0 second of active combat, announce live DPS overhead
+			if (.combat_ms[.@i] % 1000 == 0) {
+				if (.sec_dmg[.@i] > .peak_dps[.@i]) {
+					.peak_dps[.@i] = .sec_dmg[.@i];
+				}
+				.@sec = .combat_ms[.@i] / 1000;
+				.@avg_dps = .total_dmg[.@i] / .@sec;
+				unittalk .gid[.@i], "[DPS " + .@sec + "s] Avg: " + callfunc("F_InsertComma", .@avg_dps) + "/s | Now: " + callfunc("F_InsertComma", .sec_dmg[.@i]) + "/s | Peak: " + callfunc("F_InsertComma", .peak_dps[.@i]) + "/s";
+				.sec_dmg[.@i] = 0;
+			}
+		} else if (.in_combat[.@i]) {
+			.idle_ms[.@i] += 500;
+			.combat_ms[.@i] += 500;
+
+			if (.combat_ms[.@i] % 1000 == 0) {
+				if (.sec_dmg[.@i] > .peak_dps[.@i]) {
+					.peak_dps[.@i] = .sec_dmg[.@i];
+				}
+				.sec_dmg[.@i] = 0;
+			}
+
+			// End session after 3 seconds of inactivity and subtract trailing idle time
+			if (.idle_ms[.@i] >= 3000) {
+				if (.sec_dmg[.@i] > .peak_dps[.@i]) {
+					.peak_dps[.@i] = .sec_dmg[.@i];
+				}
+				.@active_ms = .combat_ms[.@i] - .idle_ms[.@i];
+				if (.@active_ms < 1000) {
+					.@active_ms = 1000;
+				}
+				.@final_sec = .@active_ms / 1000;
+				.@final_dps = .total_dmg[.@i] / .@final_sec;
+
+				unittalk .gid[.@i], "[Final] Total: " + callfunc("F_InsertComma", .total_dmg[.@i]) + " | Avg DPS: " + callfunc("F_InsertComma", .@final_dps) + "/s | Peak: " + callfunc("F_InsertComma", .peak_dps[.@i]) + "/s (" + .@final_sec + "s)";
+				specialeffect EF_HEAL, AREA, "DPS_FX#" + .@i;
+				callsub S_ResetCombat, .@i;
+			}
+		}
+	}
+
+	initnpctimer;
+	end;
+
+// --- Config Bridge for Dummy Settings Signs ---
+OnLoadConfig:
+	.@i = .cfg_idx;
+	.cfg_race = .race[.@i];
+	.cfg_ele = .ele[.@i];
+	.cfg_ele_lv = .ele_lv[.@i];
+	.cfg_size = .size[.@i];
+	.cfg_def = .def[.@i];
+	.cfg_mdef = .mdef[.@i];
+	.cfg_flee = .flee[.@i];
+	.cfg_sprite = .sprite[.@i];
+	.cfg_preset$ = .preset$[.@i];
+	end;
+
+OnSaveConfig:
+	.@i = .cfg_idx;
+	.race[.@i] = .cfg_race;
+	.ele[.@i] = .cfg_ele;
+	.ele_lv[.@i] = .cfg_ele_lv;
+	.size[.@i] = .cfg_size;
+	.def[.@i] = .cfg_def;
+	.mdef[.@i] = .cfg_mdef;
+	.flee[.@i] = .cfg_flee;
+	.sprite[.@i] = .cfg_sprite;
+	.preset$[.@i] = .cfg_preset$;
+	callsub S_ApplyStats, .@i;
+	callsub S_ResetCombat, .@i;
+	end;
+
+OnResetOnly:
+	.@i = .cfg_idx;
+	callsub S_ResetCombat, .@i;
+	specialeffect EF_HEAL, AREA, "DPS_FX#" + .@i;
+	end;
+
+OnMyMobDead:
+	end;
+}
+
+// --- Invisible effect anchors (one per dummy; coords must match the dummy x/y in OnInit) ---
+prontera,162,180,0	script	DPS_FX#0	139,{ end; }
+prontera,162,174,0	script	DPS_FX#1	139,{ end; }
+prontera,162,168,0	script	DPS_FX#2	139,{ end; }
+
+// --- Dummy Configurator Signs ---
+prontera,159,180,4	script	Dummy Settings#0	857,{
+	.@id = atoi(strnpcinfo(2));
+
+	setarray .@race_names$[0], "Formless", "Undead", "Brute", "Plant", "Insect", "Fish", "Demon", "Demi-Human", "Angel", "Dragon";
+	setarray .@ele_names$[0], "Neutral", "Water", "Earth", "Fire", "Wind", "Poison", "Holy", "Shadow", "Ghost", "Undead";
+	setarray .@size_names$[0], "Small", "Medium", "Large";
+
+	while (1) {
+		set getvariableofnpc(.cfg_idx, "DPS_Dummy_Core"), .@id;
+		donpcevent "DPS_Dummy_Core::OnLoadConfig";
+
+		.@race = getvariableofnpc(.cfg_race, "DPS_Dummy_Core");
+		.@ele = getvariableofnpc(.cfg_ele, "DPS_Dummy_Core");
+		.@ele_lv = getvariableofnpc(.cfg_ele_lv, "DPS_Dummy_Core");
+		.@size = getvariableofnpc(.cfg_size, "DPS_Dummy_Core");
+		.@def = getvariableofnpc(.cfg_def, "DPS_Dummy_Core");
+		.@mdef = getvariableofnpc(.cfg_mdef, "DPS_Dummy_Core");
+		.@flee = getvariableofnpc(.cfg_flee, "DPS_Dummy_Core");
+		.@sprite = getvariableofnpc(.cfg_sprite, "DPS_Dummy_Core");
+		.@preset$ = getvariableofnpc(.cfg_preset$, "DPS_Dummy_Core");
+
+		mes "[ ^0055FFDPS Dummy #" + (.@id + 1) + " Settings^000000 ]";
+		mes "Preset: ^008800" + .@preset$ + "^000000";
+		mes "Race: ^5555FF" + .@race_names$[.@race] + "^000000 | Size: ^5555FF" + .@size_names$[.@size] + "^000000";
+		mes "Element: ^5555FF" + .@ele_names$[.@ele] + " Lv." + .@ele_lv + "^000000";
+		mes "DEF: ^FF3333" + .@def + "^000000 | MDEF: ^FF3333" + .@mdef + "^000000 | Flee: ^FF3333" + .@flee + "^000000";
+		next;
+
+		switch (select(
+			"~ Quick Presets",
+			"~ Change Race",
+			"~ Change Element & Level",
+			"~ Change Size",
+			"~ Set DEF / MDEF / Flee",
+			"~ Change Dummy Appearance",
+			"^FF3333~ Reset DPS & Heal Dummy^000000",
+			"Close"
+		)) {
+		case 1:
+			switch (select(
+				"Standard Dummy (Demi-Human, Neutral 1, 0 DEF)",
+				"WoE Player Target (Demi-Human, Neutral 1, 45 DEF / 60 MDEF)",
+				"MVP Boss Target (Demon, Shadow 3, Large, 60 DEF / 45 MDEF)",
+				"High-DEF Tank (Demi-Human, Neutral 1, 90 DEF / 80 MDEF)",
+				"WoE Emperium (Angel, Holy 1, Small, 40 DEF / 50 MDEF)",
+				"Back"
+			)) {
+			case 1:
+				.@race = 7; .@ele = 0; .@ele_lv = 1; .@size = 1; .@def = 0; .@mdef = 0; .@flee = 0; .@sprite = 1905; .@preset$ = "Standard Dummy";
+				break;
+			case 2:
+				.@race = 7; .@ele = 0; .@ele_lv = 1; .@size = 1; .@def = 45; .@mdef = 60; .@flee = 220; .@sprite = 1905; .@preset$ = "WoE Player Target";
+				break;
+			case 3:
+				.@race = 6; .@ele = 7; .@ele_lv = 3; .@size = 2; .@def = 60; .@mdef = 45; .@flee = 250; .@sprite = 1039; .@preset$ = "MVP Boss Target";
+				break;
+			case 4:
+				.@race = 7; .@ele = 0; .@ele_lv = 1; .@size = 1; .@def = 90; .@mdef = 80; .@flee = 200; .@sprite = 1905; .@preset$ = "High-DEF Tank";
+				break;
+			case 5:
+				.@race = 8; .@ele = 6; .@ele_lv = 1; .@size = 0; .@def = 40; .@mdef = 50; .@flee = 0; .@sprite = 1288; .@preset$ = "WoE Emperium";
+				break;
+			case 6:
+				continue;
+			}
+			break;
+
+		case 2:
+			.@race = select("Formless:Undead:Brute:Plant:Insect:Fish:Demon:Demi-Human:Angel:Dragon") - 1;
+			.@preset$ = "Custom";
+			break;
+
+		case 3:
+			.@ele = select("Neutral:Water:Earth:Fire:Wind:Poison:Holy:Shadow:Ghost:Undead") - 1;
+			.@ele_lv = select("Level 1:Level 2:Level 3:Level 4");
+			.@preset$ = "Custom";
+			break;
+
+		case 4:
+			.@size = select("Small:Medium:Large") - 1;
+			.@preset$ = "Custom";
+			break;
+
+		case 5:
+			mes "Enter Hard DEF (0 - 99):";
+			if (input(.@new_def, 0, 99) != 0) { mes "Invalid range."; next; continue; }
+			mes "Enter Hard MDEF (0 - 99):";
+			if (input(.@new_mdef, 0, 99) != 0) { mes "Invalid range."; next; continue; }
+			mes "Enter Flee (0 - 500):";
+			if (input(.@new_flee, 0, 500) != 0) { mes "Invalid range."; next; continue; }
+			.@def = .@new_def;
+			.@mdef = .@new_mdef;
+			.@flee = .@new_flee;
+			.@preset$ = "Custom";
+			next;
+			break;
+
+		case 6:
+			switch (select("Barricade:Emperium:Poring:Baphomet:Amon Ra")) {
+				case 1: .@sprite = 1905; break;
+				case 2: .@sprite = 1288; break;
+				case 3: .@sprite = 1002; break;
+				case 4: .@sprite = 1039; break;
+				case 5: .@sprite = 1511; break;
+			}
+			break;
+
+		case 7:
+			set getvariableofnpc(.cfg_idx, "DPS_Dummy_Core"), .@id;
+			donpcevent "DPS_Dummy_Core::OnResetOnly";
+			mes "DPS counter reset and dummy restored.";
+			close;
+
+		case 8:
+			close;
+		}
+
+		set getvariableofnpc(.cfg_idx, "DPS_Dummy_Core"), .@id;
+		set getvariableofnpc(.cfg_race, "DPS_Dummy_Core"), .@race;
+		set getvariableofnpc(.cfg_ele, "DPS_Dummy_Core"), .@ele;
+		set getvariableofnpc(.cfg_ele_lv, "DPS_Dummy_Core"), .@ele_lv;
+		set getvariableofnpc(.cfg_size, "DPS_Dummy_Core"), .@size;
+		set getvariableofnpc(.cfg_def, "DPS_Dummy_Core"), .@def;
+		set getvariableofnpc(.cfg_mdef, "DPS_Dummy_Core"), .@mdef;
+		set getvariableofnpc(.cfg_flee, "DPS_Dummy_Core"), .@flee;
+		set getvariableofnpc(.cfg_sprite, "DPS_Dummy_Core"), .@sprite;
+		set getvariableofnpc(.cfg_preset$, "DPS_Dummy_Core"), .@preset$;
+		donpcevent "DPS_Dummy_Core::OnSaveConfig";
+	}
+}
+
+prontera,159,174,4	duplicate(Dummy Settings#0)	Dummy Settings#1	857
+prontera,159,168,4	duplicate(Dummy Settings#0)	Dummy Settings#2	857

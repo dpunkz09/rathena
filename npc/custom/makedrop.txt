@@ -1,0 +1,20 @@
+-	script	atcmd_makeitem	-1,{
+OnInit:
+	bindatcmd "makeitem", strnpcinfo(3) + "::OnMakeItem", 99, 99;
+	end;
+
+OnMakeItem:
+	.@item_id = atoi(.@atcmd_parameters$[0]);
+	.@amount = (.@atcmd_numparameters > 1) ? atoi(.@atcmd_parameters$[1]) : 1;
+
+	if (!.@item_id || getitemname(.@item_id) == "null") {
+		dispbottom "Usage: @makeitem <Item ID> {<Amount>}";
+		end;
+	}
+
+	getmapxy(.@map$, .@x, .@y, BL_PC);
+	for (.@i = 0; .@i < .@amount; .@i++) {
+		makeitem .@item_id, 1, .@map$, .@x + rand(-2, 2), .@y + rand(-2, 2);
+	}
+	end;
+}

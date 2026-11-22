@@ -1,0 +1,108 @@
+# This file is a part of rAthena.
+#   Copyright(C) 2021 rAthena Development Team
+#   https://rathena.org - https://github.com/rathena
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+###########################################################################
+# Attendance Database
+###########################################################################
+#
+# Attendance Settings
+#
+###########################################################################
+# - Start                   Start date.
+#   End                     End date.
+#   Rewards:                List of rewards for each day.
+#     - Day                 Reward day.
+#       ItemId              Item ID.
+###########################################################################
+
+Header:
+  Type: ATTENDANCE_DB
+  Version: 1
+Body:
+  # Monthly Attendance Rewards (20 Days)
+  # Suitable for 10x EXP / 3x Drop mid-rate server
+  - Start: 20240101
+    End: 20991231
+    Rewards:
+      # Week 1 - Basic Rewards (Days 1-5)
+      - Day: 1
+        ItemId: 12208  # Battle Manual (50% EXP for 30 min)
+        Amount: 3
+      - Day: 2
+        ItemId: 607    # Yggdrasil Berry (Full HP/SP restore)
+        Amount: 5
+      - Day: 3
+        ItemId: 14534  # Gym Pass (STR+2 for 20 min)
+        Amount: 3
+      - Day: 4
+        ItemId: 12210  # Bubble Gum (2x Drop Rate for 30 min)
+        Amount: 2
+      - Day: 5
+        ItemId: 608    # Yggdrasil Seed (50% HP/SP restore)
+        Amount: 10
+      
+      # Week 2 - Enhanced Rewards (Days 6-10)
+      - Day: 6
+        ItemId: 12211  # Kafra Card (30 day)
+        Amount: 1
+      - Day: 7
+        ItemId: 12208  # Battle Manual
+        Amount: 5
+      - Day: 8
+        ItemId: 12418  # Weapon Card Album
+        Amount: 1
+      - Day: 9
+        ItemId: 14533  # Focus Concentration Potion (AGI+2, DEX+2)
+        Amount: 3
+      - Day: 10
+        ItemId: 12210  # Bubble Gum
+        Amount: 3
+      
+      # Week 3 - Premium Rewards (Days 11-15)
+      - Day: 11
+        ItemId: 12016  # Speed Potion (Speed increase)
+        Amount: 5
+      - Day: 12
+        ItemId: 12214  # Siege White Potion (1000 HP + buffs)
+        Amount: 10
+      - Day: 13
+        ItemId: 14592  # Job Battle Manual (Job EXP +100%)
+        Amount: 3
+      - Day: 14
+        ItemId: 12419  # Armor Card Album
+        Amount: 1
+      - Day: 15
+        ItemId: 607    # Yggdrasil Berry
+        Amount: 10
+      
+      # Week 4 - Excellent Rewards (Days 16-20)
+      - Day: 16
+        ItemId: 12210  # Bubble Gum
+        Amount: 5
+      - Day: 17
+        ItemId: 12420  # Accessory Card Album
+        Amount: 1
+      - Day: 18
+        ItemId: 12213  # Enriched Oridecon (Safe refine weapon to +9)
+        Amount: 1
+      - Day: 19
+        ItemId: 12212  # Enriched Elunium (Safe refine armor to +9)
+        Amount: 1
+      - Day: 20
+        ItemId: 607    # Yggdrasil Berry (Grand Finale)
+        Amount: 20
+

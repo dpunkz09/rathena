@@ -1,0 +1,347 @@
+//===== rAthena Script =======================================
+//= Yggdrasil Berry Farming Room (Enhanced v3.1)
+//===== Description: =========================================
+//= Conflict-free Berry Room on guild_vs3 with Free Return
+//= while timer is active, Harvest Combo drop boosts, Ancient
+//= Guardian mini-boss bursts, in-room storage & SQL rankings.
+//============================================================
+
+// ---------------------------------------------------------
+// Entry NPC (Spaced 3 cells from Gold Room Guardian at 147,172)
+// ---------------------------------------------------------
+prontera,144,172,4	script	Berry Room Warper	4_M_SAGE_C,{
+	.@npc$   = "^00AA55[ Berry Room Warper ]^000000";
+	.@cost   = getvariableofnpc(.cost, "BerryRoomHandler");
+	.@map$   = getvariableofnpc(.map$, "BerryRoomHandler");
+	.@minlv  = getvariableofnpc(.minlv, "BerryRoomHandler");
+	.@mins   = getvariableofnpc(.minutes, "BerryRoomHandler");
+	.@left   = berry_end - gettimetick(2);
+
+	if (.@left <= 0 && berry_end > 0)
+		berry_end = 0;
+
+	mes .@npc$;
+	mes "Welcome to the ^0055FFYggdrasil Berry Grove^000000.";
+	mes "Entry Fee: ^FF0000" + callfunc("F_InsertComma", .@cost) + " Zeny^000000 (Min Lv. " + .@minlv + ")";
+	mes "Session Limit: ^0055FF" + .@mins + " minutes^000000";
+	if (.@left > 0)
+		mes "Active Session: ^00AA00" + sprintf("%02d:%02d", .@left / 60, .@left % 60) + " remaining^000000";
+	next;
+
+	.@menu$ = "";
+	if (.@left > 0)
+		.@menu$ = "~ ^00AA00Return to Berry Room (Free)^000000:";
+
+	.@s = select(.@menu$ + "~ Enter Berry Room:~ Seed Exchanger & Storage:~ Top 5 Berry Harvesters:~ My Statistics & Rules:~ Cancel");
+	if (.@left <= 0) .@s += 1;
+
+	switch(.@s) {
+	case 1: // Free return while timer is still running
+		if (BaseLevel < .@minlv) {
+			mes .@npc$;
+			mes "You must be at least ^FF0000Base Level " + .@minlv + "^000000 to enter.";
+			close;
+		}
+		mes .@npc$;
+		mes "Welcome back! Your existing timer is still active—no extra fee required.";
+		close2;
+		@berry_combo = 0;
+		deltimer "BerryRoomHandler::OnCountdown";
+		addtimer 1000, "BerryRoomHandler::OnCountdown";
+		warp .@map$, 0, 0;
+		dispbottom "[Berry Room] Time remaining: " + sprintf("%02d:%02d", .@left / 60, .@left % 60), 0x00FF88;
+		end;
+
+	case 2: // New paid entry
+		if (BaseLevel < .@minlv) {
+			mes .@npc$;
+			mes "You must be at least ^FF0000Base Level " + .@minlv + "^000000 to enter.";
+			close;
+		}
+		if (Zeny < .@cost) {
+			mes .@npc$;
+			mes "You need ^FF0000" + callfunc("F_InsertComma", .@cost) + " Zeny^000000 to enter.";
+			close;
+		}
+		if (!checkweight(607, 1)) {
+			mes .@npc$;
+			mes "You are overweight! Please store your items first.";
+			close;
+		}
+		Zeny -= .@cost;
+		berry_end = gettimetick(2) + (.@mins * 60);
+		@berry_combo = 0;
+
+		mes .@npc$;
+		mes "You have ^0055FF" + .@mins + " minutes^000000 in the grove.";
+		mes "If you die or disconnect, speak to me again to return ^00AA00for free^000000 before your timer expires.";
+		close2;
+		deltimer "BerryRoomHandler::OnCountdown";
+		addtimer 1000, "BerryRoomHandler::OnCountdown";
+		warp .@map$, 0, 0;
+		dispbottom "[Berry Room] Session started! Time remaining: " + sprintf("%02d:%02d", .@mins, 0), 0x00FF88;
+		end;
+
+	case 3: // Seed Converter & Storage
+		callfunc "F_BerryUtility", .@npc$;
+		end;
+
+	case 4: // Top 5 Leaderboard
+		mes .@npc$;
+		mes "^0055FF=== Top 5 Berry Harvesters ===^000000";
+		.@nb = query_sql("SELECT MAX(c.name), MAX(CAST(r.value AS UNSIGNED)) AS val FROM `acc_reg_num` r INNER JOIN `char` c ON r.account_id = c.account_id WHERE r.key = 'BERRYROOM_BERRIES' GROUP BY r.account_id ORDER BY val DESC LIMIT 5", .@name$, .@val);
+		if (.@nb == 0) {
+			mes "No harvests recorded yet!";
+		} else {
+			for (.@i = 0; .@i < .@nb; .@i++) {
+				mes "^00AA55#" + (.@i + 1) + "^000000 " + .@name$[.@i] + " - ^0055FF" + callfunc("F_InsertComma", .@val[.@i]) + " Berries^000000";
+			}
+		}
+		close;
+
+	case 5: // Stats & Mechanics
+		mes .@npc$;
+		mes "^0055FF[ Your Lifetime Stats ]^000000";
+		mes "Guardians Slain: ^00AA55" + callfunc("F_InsertComma", #BERRYROOM_KILLS) + "^000000";
+		mes "Berries Harvested: ^0055FF" + callfunc("F_InsertComma", #BERRYROOM_BERRIES) + "^000000";
+		next;
+		mes .@npc$;
+		mes "^00AA55[ Harvest Combo & Events ]^000000";
+		mes " - Every ^0055FF20 consecutive kills^000000 grants +2 Bonus Berries.";
+		mes " - At ^0055FF50+ Combo^000000, Berry drop rate rises from 50% to ^00AA0075%^000000.";
+		mes " - Every ^FF880060 zone kills^000000 awakens an Ancient Yggdrasil Guardian.";
+		close;
+
+	case 6:
+		close;
+	}
+}
+
+// ---------------------------------------------------------
+// Exit & In-Room Storage NPC (Center of guild_vs3)
+// ---------------------------------------------------------
+guild_vs3,50,50,4	script	Berry Room Exit	4_M_SAGE_C,{
+	.@npc$ = "^00AA55[ Grove Caretaker ]^000000";
+	.@left = berry_end - gettimetick(2);
+
+	mes .@npc$;
+	if (.@left > 0)
+		mes "Time Remaining: ^00AA00" + sprintf("%02d:%02d", .@left / 60, .@left % 60) + "^000000";
+	mes "Current Harvest Combo: ^0055FF" + @berry_combo + " kills^000000";
+	next;
+
+	switch(select("~ Open Storage / Convert Seeds:~ Check Time Left:~ Leave Grove (Ends Session):~ Stay")) {
+	case 1:
+		callfunc "F_BerryUtility", .@npc$;
+		end;
+
+	case 2:
+		mes .@npc$;
+		if (.@left > 0)
+			mes "Time remaining: ^00AA00" + sprintf("%02d:%02d", .@left / 60, .@left % 60) + "^000000";
+		else
+			mes "Your session has expired.";
+		close;
+
+	case 3:
+		mes .@npc$;
+		mes "^FF0000Warning:^000000 Leaving voluntarily will forfeit your remaining session time.";
+		next;
+		if (select("~ Confirm Exit:~ Cancel") == 2) close;
+		berry_end = 0;
+		@berry_combo = 0;
+		deltimer "BerryRoomHandler::OnCountdown";
+		close2;
+		warp "SavePoint", 0, 0;
+		end;
+
+	case 4:
+		close;
+	}
+}
+
+// ---------------------------------------------------------
+// Shared Utility Function: Storage & Seed-to-Berry Converter
+// ---------------------------------------------------------
+function	script	F_BerryUtility	{
+	.@npc$ = getarg(0);
+	.@seeds = countitem(608);
+
+	mes .@npc$;
+	mes "Yggdrasil Berries are heavy! You can store your loot here or fuse ^0055FF3 Yggdrasil Seeds^000000 into ^00AA551 Yggdrasil Berry^000000.";
+	mes "Your Yggdrasil Seeds: ^0055FF" + .@seeds + "^000000";
+	next;
+
+	switch(select("~ Open Kafra Storage (Free):~ Convert 3 Seeds -> 1 Berry:~ Close")) {
+	case 1:
+		close2;
+		openstorage;
+		end;
+
+	case 2:
+		.@max_craft = .@seeds / 3;
+		if (.@max_craft < 1) {
+			mes .@npc$;
+			mes "You need at least ^0055FF3 Yggdrasil Seeds^000000 to synthesize a Berry.";
+			close;
+		}
+		mes .@npc$;
+		mes "How many Yggdrasil Berries would you like to craft? (Max: " + .@max_craft + ")";
+		next;
+		input .@amt, 1, .@max_craft;
+		if (countitem(608) < (.@amt * 3)) close;
+		if (!checkweight(607, .@amt)) {
+			mes .@npc$;
+			mes "Not enough free weight capacity!";
+			close;
+		}
+		delitem 608, (.@amt * 3);
+		getitem 607, .@amt;
+		#BERRYROOM_BERRIES += .@amt;
+		specialeffect2 EF_HEAL2;
+		mes .@npc$;
+		mes "Synthesized ^00AA55" + .@amt + " Yggdrasil Berry(s)^000000!";
+		close;
+
+	case 3:
+		close;
+	}
+}
+
+// ---------------------------------------------------------
+// Spawns, Combo Drops, Guardian Mini-Boss & Countdown Handler
+// ---------------------------------------------------------
+-	script	BerryRoomHandler	-1,{
+OnInit:
+	// ---- Configuration ----
+	.map$       = "guild_vs3";  // Valid rAthena map, isolated from Gold Room (ordeal_1-1 & 1-2)
+	.cost       = 100000;       // Entry fee (Zeny)
+	.minlv      = 50;           // Minimum base level
+	.minutes    = 30;           // Time limit per paid entry
+	.mob_id     = 1047;         // Peco Peco Egg
+	.mob_name$  = "Berry Guardian";
+	.mob_count  = 55;           // Monsters kept alive in the room
+	.berry_id   = 607;          // Yggdrasil Berry
+	.berry_rate = 50;           // Base % chance per kill (becomes 75% at 50+ combo)
+	.seed_id    = 608;          // Yggdrasil Seed
+	.seed_rate  = 3;            // % chance of a seed per kill
+	.zone_kills = 0;
+	// -----------------------
+
+	killmonsterall .map$;
+	monster .map$, 0, 0, .mob_name$, .mob_id, .mob_count, strnpcinfo(0) + "::OnBerryMobKill";
+	end;
+
+OnBerryMobKill:
+	monster .map$, 0, 0, .mob_name$, .mob_id, 1, strnpcinfo(0) + "::OnBerryMobKill";
+	if (!playerattached()) end;
+
+	#BERRYROOM_KILLS++;
+	@berry_combo++;
+	.zone_kills++;
+
+	// Boost drop rate from 50% to 75% when Harvest Combo >= 50
+	.@active_rate = (@berry_combo >= 50) ? (.berry_rate + 25) : .berry_rate;
+
+	if (rand(100) < .@active_rate) {
+		if (checkweight(.berry_id, 1)) {
+			getitem .berry_id, 1;
+			#BERRYROOM_BERRIES++;
+		} else {
+			dispbottom "[Berry Room] Overweight! Use the Grove Caretaker at the center to store your berries.", 0xFF3333;
+		}
+	}
+
+	if (rand(100) < .seed_rate && checkweight(.seed_id, 1)) {
+		getitem .seed_id, 1;
+		dispbottom "[Berry Room] Bonus! You found a Yggdrasil Seed.", 0x00FF88;
+	}
+
+	// Every 20 consecutive kills: Bountiful Bloom (+2 Berries)
+	if (@berry_combo % 20 == 0) {
+		specialeffect2 EF_ANGEL2;
+		if (checkweight(.berry_id, 2)) {
+			getitem .berry_id, 2;
+			#BERRYROOM_BERRIES += 2;
+			dispbottom "[Bountiful Bloom] " + @berry_combo + " Harvest Combo! Received +2 bonus Yggdrasil Berries!", 0x00FF88;
+		}
+		if (@berry_combo == 50) {
+			dispbottom "[Nature's Blessing] 50+ Combo reached! Berry drop rate increased to " + .@active_rate + "%!", 0xFFCC00;
+		}
+	}
+
+	// Every 60 collective zone kills: Spawn Ancient Yggdrasil Guardian
+	if (.zone_kills >= 60) {
+		.zone_kills = 0;
+		monster .map$, 0, 0, "Ancient Yggdrasil Guardian", 1083, 1, strnpcinfo(0) + "::OnGuardianKill";
+		mapannounce .map$, "[Berry Grove] An Ancient Yggdrasil Guardian has awakened in the grove!", bc_map, 0x00FF88;
+	}
+	end;
+
+OnGuardianKill:
+	if (!playerattached()) end;
+	getmapxy(.@m$, .@x, .@y, BL_PC);
+	mapannounce .@m$, "[Berry Grove] " + strcharinfo(0) + " vanquished the Ancient Yggdrasil Guardian!", bc_map, 0xFFCC00;
+	specialeffect2 EF_MVP;
+	for (.@i = 0; .@i < 8; .@i++) {
+		makeitem .berry_id, 1, .@m$, .@x + rand(-3, 3), .@y + rand(-3, 3);
+	}
+	for (.@i = 0; .@i < 4; .@i++) {
+		makeitem .seed_id, 1, .@m$, .@x + rand(-2, 2), .@y + rand(-2, 2);
+	}
+	makeitem 617, 1, .@m$, .@x, .@y; // Old Violet Box
+	end;
+
+// Anti-cheat: Prevent unauthorized warps/memos into the Berry Room
+OnPCLoadMapEvent:
+	if (strcharinfo(3) == .map$) {
+		if (berry_end <= gettimetick(2)) {
+			dispbottom "[Berry Room] No active session found. Warping to save point.", 0xFF3333;
+			warp "SavePoint", 0, 0;
+		}
+	}
+	end;
+
+// Reset combo on death while preserving remaining session time for Free Return
+OnPCDieEvent:
+	if (strcharinfo(3) == .map$) {
+		@berry_combo = 0;
+		deltimer strnpcinfo(0) + "::OnCountdown";
+		.@left = berry_end - gettimetick(2);
+		if (.@left > 0) {
+			dispbottom "[Berry Room] Harvest Combo reset! Speak to the Berry Room Warper to return for FREE (" + sprintf("%02d:%02d", .@left / 60, .@left % 60) + " left).", 0xFFAA00;
+		}
+	}
+	end;
+
+// Per-second countdown while inside the map
+OnCountdown:
+	if (strcharinfo(3) != .map$) end;
+	.@left = berry_end - gettimetick(2);
+	if (.@left <= 0) {
+		berry_end = 0;
+		@berry_combo = 0;
+		dispbottom "[Berry Room] Your time in the Berry Room has expired.", 0xFFAA00;
+		warp "SavePoint", 0, 0;
+		end;
+	}
+	if ((.@left > 60 && .@left % 60 == 0) || (.@left <= 60 && (.@left % 10 == 0 || .@left <= 5)))
+		dispbottom "[Berry Room] Time remaining: " + sprintf("%02d:%02d", .@left / 60, .@left % 60);
+	addtimer 1000, strnpcinfo(0) + "::OnCountdown";
+	end;
+}
+
+// ---------------------------------------------------------
+// Mapflags (guild_vs3)
+// ---------------------------------------------------------
+guild_vs3	mapflag	loadevent
+guild_vs3	mapflag	nowarp
+guild_vs3	mapflag	nowarpto
+guild_vs3	mapflag	noteleport
+guild_vs3	mapflag	nosave	SavePoint
+guild_vs3	mapflag	nomemo
+guild_vs3	mapflag	nobranch
+guild_vs3	mapflag	noexppenalty
+guild_vs3	mapflag	nozenypenalty
+guild_vs3	mapflag	noreturn
+guild_vs3	mapflag	nogo

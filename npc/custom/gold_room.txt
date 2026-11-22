@@ -1,0 +1,330 @@
+//===== rAthena Script =======================================
+//= Enhanced Risk/Reward Gold Room (Pre-Renewal)
+//===== Description: =========================================
+//= Dual-tier Gold Room (Safe & PvP), Gold Fever kill streaks,
+//= Golden Mimic mini-boss bursts, SQL leaderboard & exchanger.
+//============================================================
+
+prontera,147,172,4	script	Gold Room Guardian#main::GoldRoom_Core	852,{
+	.@npc$ = "^FFAA00[ Gold Room Guardian ]^000000";
+
+	// Reset daily entries if calendar day changed (YYYYMMDD)
+	.@today = atoi(gettimestr("%Y%m%d", 9));
+	if (#GR_LAST_DAY != .@today) {
+		#GR_LAST_DAY = .@today;
+		#GR_ENTRIES = 0;
+	}
+	.@rem_entries = .daily_limit - #GR_ENTRIES;
+
+	mes .@npc$;
+	mes "Fortune favors the bold, ^0055FF" + strcharinfo(0) + "^000000.";
+	mes "Remaining Entries Today: ^00AA00" + .@rem_entries + " / " + .daily_limit + "^000000";
+	mes "Session Duration: ^0055FF" + .session_mins + " minutes^000000";
+	mes "Your Total Farmed: ^FF8800" + callfunc("F_InsertComma", GR_TOTAL_GOLD) + " Gold^000000";
+	next;
+
+	switch(select(
+		"~ Enter Safe Sanctum (1x Gold | No PvP)",
+		"~ Enter Outlaw Abyss (^FF00002x Gold | PvP ON^000000)",
+		"~ Exchange Farmed Gold",
+		"~ Top 5 Gold Farmers",
+		"~ Rules & Fever Mechanics"
+	)) {
+	case 1:
+		callsub S_EnterRoom, .safe_map$, 50, 50, 0;
+		end;
+
+	case 2:
+		callsub S_EnterRoom, .pvp_map$, 50, 50, 1;
+		end;
+
+	case 3:
+		.@gold_count = countitem(.gold_id);
+		mes .@npc$;
+		mes "You currently hold ^FF8800" + .@gold_count + " Gold^000000.";
+		mes "Exchange Rates:";
+		mes " - ^00AA00" + callfunc("F_InsertComma", .zeny_rate) + "z^000000 per Gold";
+		mes " - ^0055FF" + .cash_rate + " Cash Point(s)^000000 per 10 Gold";
+		next;
+		if (.@gold_count < 1) {
+			mes .@npc$;
+			mes "Come back once you have farmed some Gold.";
+			close;
+		}
+		switch(select("~ Trade for Zeny:~ Trade for Cash Points (10:1):~ Cancel")) {
+		case 1:
+			mes .@npc$;
+			mes "How many Gold would you like to exchange for Zeny? (Max: " + .@gold_count + ")";
+			next;
+			input .@amt, 1, .@gold_count;
+			if (countitem(.gold_id) < .@amt) close;
+			.@total_zeny = .@amt * .zeny_rate;
+			if (Zeny + .@total_zeny > MAX_ZENY) {
+				mes .@npc$;
+				mes "You cannot carry that much Zeny!";
+				close;
+			}
+			delitem .gold_id, .@amt;
+			Zeny += .@total_zeny;
+			specialeffect2 EF_COIN;
+			mes .@npc$;
+			mes "Exchanged ^FF8800" + .@amt + " Gold^000000 for ^00AA00" + callfunc("F_InsertComma", .@total_zeny) + "z^000000!";
+			close;
+
+		case 2:
+			.@max_bundles = .@gold_count / 10;
+			if (.@max_bundles < 1) {
+				mes .@npc$;
+				mes "You need at least ^FF880010 Gold^000000 for Cash Points.";
+				close;
+			}
+			mes .@npc$;
+			mes "Enter bundles of 10 Gold to trade (1 bundle = " + .cash_rate + " Cash Point). Max: " + .@max_bundles;
+			next;
+			input .@bundles, 1, .@max_bundles;
+			.@cost = .@bundles * 10;
+			if (countitem(.gold_id) < .@cost) close;
+			delitem .gold_id, .@cost;
+			#CASHPOINTS += (.@bundles * .cash_rate);
+			specialeffect2 EF_ANGEL2;
+			mes .@npc$;
+			mes "Received ^0055FF" + (.@bundles * .cash_rate) + " Cash Point(s)^000000! Total: " + #CASHPOINTS;
+			close;
+
+		case 3:
+			close;
+		}
+		end;
+
+	case 4:
+		mes .@npc$;
+		mes "^0055FF=== Top 5 All-Time Gold Farmers ===^000000";
+		.@nb = query_sql("SELECT c.name, CAST(r.value AS UNSIGNED) AS val FROM `char_reg_num` r INNER JOIN `char` c ON r.char_id = c.char_id WHERE r.key = 'GR_TOTAL_GOLD' ORDER BY val DESC LIMIT 5", .@name$, .@val);
+		if (.@nb == 0) {
+			mes "No records logged yet. Be the first!";
+		} else {
+			for (.@i = 0; .@i < .@nb; .@i++) {
+				mes "^FF8800#" + (.@i + 1) + "^000000 " + .@name$[.@i] + " - ^00AA00" + callfunc("F_InsertComma", .@val[.@i]) + " Gold^000000";
+			}
+		}
+		close;
+
+	case 5:
+		mes .@npc$;
+		mes "^0055FF[ Gold Fever Multiplier ]^000000";
+		mes "Every 15 consecutive kills raises your Fever Tier (up to Tier 3), granting +1 to +3 extra Gold per kill.";
+		next;
+		mes .@npc$;
+		mes "^FF8800[ Golden Mimic ]^000000";
+		mes "Every 50 kills in a zone awakens a Golden Mimic that showers Gold and Treasure Boxes on death.";
+		mes "^FF0000Note:^000000 Logging out, dying, or using exit commands ends your session immediately.";
+		close;
+	}
+	end;
+
+//------------------------------------------------------------
+// Entry Validation & Session Initialization
+//------------------------------------------------------------
+S_EnterRoom:
+	.@map$ = getarg(0);
+	.@x    = getarg(1);
+	.@y    = getarg(2);
+	.@pvp  = getarg(3);
+	.@npc$ = "^FFAA00[ Gold Room Guardian ]^000000";
+
+	if (#GR_ENTRIES >= .daily_limit) {
+		mes .@npc$;
+		mes "You have used all ^FF0000" + .daily_limit + "^000000 daily entries. Return after midnight!";
+		close;
+	}
+	if (Zeny < .entry_zeny) {
+		mes .@npc$;
+		mes "Entry requires an offering of ^00AA00" + callfunc("F_InsertComma", .entry_zeny) + "z^000000.";
+		close;
+	}
+
+	mes .@npc$;
+	if (.@pvp) {
+		mes "^FF0000WARNING: Outlaw Abyss is a Free-For-All PvP zone!^000000";
+		mes "Dying ejects you from the room and awards your killer a 5-Gold bounty.";
+	} else {
+		mes "Safe Sanctum has PvP disabled. Ideal for steady farming.";
+	}
+	mes "Proceed for ^00AA00" + callfunc("F_InsertComma", .entry_zeny) + "z^000000?";
+	next;
+	if (select("~ Enter Now:~ Cancel") == 2) close;
+
+	Zeny -= .entry_zeny;
+	#GR_ENTRIES++;
+	@gr_active = 1;
+	@gr_streak = 0;
+
+	close2;
+	deltimer strnpcinfo(3) + "::OnSessionExpire";
+	addtimer (.session_mins * 60000), strnpcinfo(3) + "::OnSessionExpire";
+	warp .@map$, .@x, .@y;
+	end;
+
+//------------------------------------------------------------
+// Monster Kill Handlers (Immediate Respawn + Fever)
+//------------------------------------------------------------
+OnSafeMobKill:
+	monster .safe_map$, 0, 0, "Gold Guardian", 1019, 1, strnpcinfo(3) + "::OnSafeMobKill";
+	if (!playerattached()) end;
+	callsub S_ProcessKill, 1, 0;
+	end;
+
+OnPvpMobKill:
+	monster .pvp_map$, 0, 0, "Abyssal Gold Guardian", 1369, 1, strnpcinfo(3) + "::OnPvpMobKill";
+	if (!playerattached()) end;
+	callsub S_ProcessKill, 2, 1;
+	end;
+
+S_ProcessKill:
+	.@base_gold = getarg(0);
+	.@is_pvp    = getarg(1);
+
+	@gr_streak++;
+	.@fever_tier = @gr_streak / 15;
+	if (.@fever_tier > 3) .@fever_tier = 3;
+
+	.@reward = .@base_gold + .@fever_tier;
+
+	if (checkweight(.gold_id, .@reward)) {
+		getitem .gold_id, .@reward;
+		GR_TOTAL_GOLD += .@reward;
+		specialeffect2 EF_COIN;
+	} else {
+		dispbottom "[Gold Room] Overweight! Clear your inventory to receive Gold.", 0xFF3333;
+	}
+
+	if (@gr_streak % 15 == 0 && .@fever_tier <= 3) {
+		specialeffect2 EF_ANGEL2;
+		dispbottom "[Gold Fever] Streak: " + @gr_streak + "! Fever Tier " + .@fever_tier + " active (+" + .@fever_tier + " Bonus Gold/kill)!", 0xFFCC00;
+	}
+
+	// Golden Mimic Event Check
+	if (.@is_pvp) {
+		.pvp_kills++;
+		if (.pvp_kills >= 50) {
+			.pvp_kills = 0;
+			monster .pvp_map$, 0, 0, "Golden Mimic", 1191, 1, strnpcinfo(3) + "::OnMimicKill";
+			mapannounce .pvp_map$, "[Gold Room] A Golden Mimic has spawned in the Outlaw Abyss!", bc_map, 0xFFAA00;
+		}
+	} else {
+		.safe_kills++;
+		if (.safe_kills >= 50) {
+			.safe_kills = 0;
+			monster .safe_map$, 0, 0, "Golden Mimic", 1191, 1, strnpcinfo(3) + "::OnMimicKill";
+			mapannounce .safe_map$, "[Gold Room] A Golden Mimic has spawned in the Safe Sanctum!", bc_map, 0xFFAA00;
+		}
+	}
+	return;
+
+OnMimicKill:
+	if (!playerattached()) end;
+	getmapxy(.@m$, .@x, .@y, BL_PC);
+	mapannounce .@m$, "[Gold Room] " + strcharinfo(0) + " shattered the Golden Mimic and triggered a treasure burst!", bc_map, 0x00FF88;
+	specialeffect2 EF_MVP;
+	// Scatter 15 individual Gold pieces + 1 Treasure Box around killer
+	for (.@i = 0; .@i < 15; .@i++) {
+		makeitem .gold_id, 1, .@m$, .@x + rand(-3, 3), .@y + rand(-3, 3);
+	}
+	makeitem 7444, 1, .@m$, .@x, .@y; // Treasure Box
+	end;
+
+//------------------------------------------------------------
+// Session Lifecycle, Anti-Warp & PvP Bounty Events
+//------------------------------------------------------------
+OnSessionExpire:
+	@gr_active = 0;
+	@gr_streak = 0;
+	dispbottom "[Gold Room] Your farming session has ended. Warping back to your save point.", 0xFFAA00;
+	warp "SavePoint", 0, 0;
+	end;
+
+OnPCLoadMapEvent:
+	.@m$ = strcharinfo(3);
+	if ((.@m$ == .safe_map$ || .@m$ == .pvp_map$) && !@gr_active) {
+		dispbottom "[Gold Room] Unauthorized entry detected. Returning to save point.", 0xFF3333;
+		warp "SavePoint", 0, 0;
+	}
+	end;
+
+OnPCDieEvent:
+	.@m$ = strcharinfo(3);
+	if (.@m$ == .safe_map$ || .@m$ == .pvp_map$) {
+		deltimer strnpcinfo(3) + "::OnSessionExpire";
+		@gr_active = 0;
+		@gr_streak = 0;
+		if (.@m$ == .pvp_map$ && killerrid > 0 && killerrid != getcharid(3)) {
+			.@victim$ = strcharinfo(0);
+			if (attachrid(killerrid)) {
+				getitem .gold_id, 5;
+				GR_TOTAL_GOLD += 5;
+				specialeffect2 EF_COIN;
+				dispbottom "[Outlaw Bounty] You claimed 5 Gold for slaying " + .@victim$ + "!", 0x00FF88;
+			}
+		}
+	}
+	end;
+
+OnPCLogoutEvent:
+	if (@gr_active) {
+		deltimer strnpcinfo(3) + "::OnSessionExpire";
+		@gr_active = 0;
+		@gr_streak = 0;
+	}
+	end;
+
+//------------------------------------------------------------
+// Server Startup / @reloadscript Initialization
+//------------------------------------------------------------
+OnInit:
+	// Economy & Rules Config
+	.entry_zeny   = 50000;   // Zeny cost per entry
+	.daily_limit  = 3;       // Max entries per account per day
+	.session_mins = 15;      // Minutes per entry
+	.gold_id      = 969;     // Item ID 969 = Gold
+	.zeny_rate    = 125000;  // NPC Zeny payout per Gold
+	.cash_rate    = 1;       // Cash Points per 10 Gold
+
+	// Map Config
+	.safe_map$    = "ordeal_1-1";
+	.pvp_map$     = "ordeal_1-2";
+	.safe_kills   = 0;
+	.pvp_kills    = 0;
+
+	// Clear existing mobs cleanly before spawning fresh waves
+	killmonsterall .safe_map$;
+	killmonsterall .pvp_map$;
+
+	monster .safe_map$, 0, 0, "Gold Guardian", 1019, 60, strnpcinfo(3) + "::OnSafeMobKill";
+	monster .pvp_map$,  0, 0, "Abyssal Gold Guardian", 1369, 75, strnpcinfo(3) + "::OnPvpMobKill";
+	end;
+}
+
+//------------------------------------------------------------
+// Zone Mapflags (Anti-Cheat & PvP Enforcement)
+//------------------------------------------------------------
+ordeal_1-1	mapflag	loadevent
+ordeal_1-1	mapflag	noteleport
+ordeal_1-1	mapflag	nowarp
+ordeal_1-1	mapflag	nowarpto
+ordeal_1-1	mapflag	nomemo
+ordeal_1-1	mapflag	nosave	SavePoint
+ordeal_1-1	mapflag	nobranch
+ordeal_1-1	mapflag	noreturn
+ordeal_1-1	mapflag	noexppenalty
+
+ordeal_1-2	mapflag	loadevent
+ordeal_1-2	mapflag	pvp
+ordeal_1-2	mapflag	pvp_noguild
+ordeal_1-2	mapflag	noteleport
+ordeal_1-2	mapflag	nowarp
+ordeal_1-2	mapflag	nowarpto
+ordeal_1-2	mapflag	nomemo
+ordeal_1-2	mapflag	nosave	SavePoint
+ordeal_1-2	mapflag	nobranch
+ordeal_1-2	mapflag	noreturn
+ordeal_1-2	mapflag	noexppenalty

@@ -1,0 +1,438 @@
+//===== rAthena Script =======================================
+//= Job Master (Pre-Renewal / Up to Transcendent Only)
+//===== Description: =========================================
+//= Optimized pre-renewal job changer supporting Novice, 1st,
+//= 2nd, Transcendent (Rebirth), Baby, and Pre-Re Extended jobs.
+//============================================================
+
+prontera,153,193,6	script	Job Master	123,{
+function Get_Job_Equip;
+
+// Checks if the player meets the required Base and Job levels
+function	Require_Level	{
+	if (BaseLevel < getarg(0) || JobLevel < getarg(1)) {
+		.@blvl = getarg(0) - BaseLevel;
+		.@jlvl = getarg(1) - JobLevel;
+		mes "Level requirement:";
+		mes ((getarg(0) > 1) ?
+			"^bb0000" + getarg(0) + "^000000 (^bb0000Base^000000) / " : "") +
+			"^00bb00" + getarg(1) + "^000000 (^00bb00Job^000000)";
+		mes "You need " +
+			((.@blvl > 0) ? "^bb0000" + .@blvl + "^000000 more base levels " +
+				((.@jlvl > 0) ? "and " : "") : "") +
+			((.@jlvl > 0) ? "^00bb00" + .@jlvl + "^000000 more job levels " : "") +
+			"to continue.";
+		close;
+	}
+	return;
+}
+
+// Checks if the given eaclass is a Baby class
+function	Is_Baby	{
+	return ((getarg(0, eaclass()) & EAJL_BABY) > 0);
+}
+
+// Checks if the player is eligible to rebirth into Novice High
+function	Can_Rebirth	{
+	if (!.RebirthClass)
+		return false;
+	if (!(eaclass() & EAJL_2))
+		return false; // Not a 2nd class
+	if (eaclass() & EAJL_UPPER)
+		return false; // Already Transcendent
+	if (Is_Baby())
+		return false; // Baby classes cannot rebirth
+	if (roclass(eaclass() | EAJL_UPPER) < 0)
+		return false; // Class has no Transcendent counterpart (e.g., Super Novice, Taekwon, GS, Ninja)
+	return true;
+}
+
+// Checks if the given eaclass is a 1st class (Swordman through Taekwon)
+function	Is_First_Cls	{
+	return (getarg(0) <= EAJ_TAEKWON);
+}
+
+// Prevents job changes while mounted or using a falcon/cart
+function	Check_Riding	{
+	if (checkfalcon() || checkcart() || checkriding() || ismounting()) {
+		mes "Please remove your " +
+			((checkfalcon()) ? "falcon" : "") +
+			((checkcart()) ? "cart" : "") +
+			((checkriding()) ? "Peco" : "") +
+			((ismounting()) ? "mount" : "") +
+			" before proceeding.";
+		close;
+	}
+	return;
+}
+
+// Ensures all skill points are spent before changing jobs
+function	Check_SkillPoints	{
+	if (.SkillPointCheck && SkillPoint) {
+		mes "Please use all your skill points before proceeding.";
+		close;
+	}
+	return;
+}
+
+// Appends available job IDs to the .@job_opt menu array
+function	Job_Options	{
+	.@argcount = getargcount();
+	.@arr_size = getarraysize(getarg(0));
+	for (.@i = 1; .@i < .@argcount; .@i++) {
+		setarray getelementofarray(getarg(0), .@arr_size++), getarg(.@i);
+	}
+	return;
+}
+
+// Executes the job change and grants rewards
+function	Job_Change	{
+	.@previous_class = Class;
+	.@to_cls = getarg(0);
+	next;
+	mes .NPCName$;
+	mes "You are now " + callfunc("F_InsertArticle", jobname(.@to_cls)) + "!";
+
+	if (.@to_cls == Job_Novice_High && .LastJob)
+		lastJob = Class; // Save 2nd job for linear rebirth path
+
+	jobchange .@to_cls;
+
+	if (.@to_cls == Job_Novice_High) {
+		resetlvl(1);
+	} else if (.@to_cls == Job_Baby) {
+		resetstatus;
+		resetskill;
+		SkillPoint = 0;
+	}
+
+	specialeffect2 EF_ANGEL2;
+	specialeffect2 EF_ELECTRIC;
+
+	if (.@previous_class != Class) {
+		if (.Platinum)
+			callfunc "F_GetPlatinumSkills";
+		if (.GetJobEquip)
+			Get_Job_Equip();
+	}
+	close;
+}
+
+// Confirmation prompt before changing class
+function	Confirm_Change	{
+	.@class = getarg(0, -1);
+	.@back = getarg(1, false);
+	if (.@class < 0 || eaclass(.@class) == -1) {
+		mes "Unknown Class Error.";
+		close;
+	}
+
+	mes "Do you want to change into ^0055FF" + jobname(.@class) + "^000000 class?";
+	.@job_option$ = (.@class == Job_Novice_High) ?
+		" ~ ^0055FFRebirth^000000" :
+		" ~ Change into ^0055FF" + jobname(.@class) + "^000000 class";
+
+	if (select(.@job_option$ + ": ~ ^777777" + ((.@back) ? "Go back" : "Cancel") + "^000000") == 1)
+		Job_Change(.@class);
+
+	if (!.@back)
+		close;
+	return;
+}
+
+// Displays the selection menu for available classes
+function	Job_Menu	{
+	while (true) {
+		.@opt_cnt = getarraysize(getarg(0));
+		if (.@opt_cnt <= 0) {
+			mes "No more jobs are available.";
+			close;
+		}
+
+		.@selected = 0;
+		if (.@opt_cnt > 1) {
+			mes "Select a job.";
+			.@menu$ = "";
+			for (.@i = 0; .@i < .@opt_cnt; .@i++) {
+				.@opt_cls = getelementofarray(getarg(0), .@i);
+				.@jobname$ = (.@opt_cls == Job_Novice_High) ? "^0055FFRebirth^000000" : jobname(.@opt_cls);
+				.@menu$ += " ~ " + .@jobname$ + ":";
+			}
+			.@menu$ += " ~ ^777777Cancel^000000";
+			.@selected = select(.@menu$) - 1;
+			if (.@selected < 0 || .@selected >= .@opt_cnt)
+				close;
+			next;
+			mes .NPCName$;
+		}
+
+		.@class = getelementofarray(getarg(0), .@selected);
+		if ((.@class == Job_Super_Novice || .@class == Job_Super_Baby) && BaseLevel < .SNovice) {
+			mes "A base level of ^bb0000" + .SNovice + "^000000 is required to turn into a " + jobname(.@class) + ".";
+			return;
+		}
+
+		Confirm_Change(.@class, .@opt_cnt > 1);
+		next;
+		mes .NPCName$;
+	}
+	return;
+}
+
+// Grants starter equipment and consumables on job change
+function	Get_Job_Equip	{
+	.@eac = eaclass();
+
+	// Basic recovery items for all job changes
+	getitem 501, 10; // Red Potion x10
+	getitem 502, 5;  // Orange Potion x5
+
+	if (Class == Job_Novice_High) {
+		// Rebirth into Novice High: consumables only
+		return;
+	} else if (Class == Job_Super_Novice || Class == Job_Super_Baby) {
+		// Super Novice / Super Baby (handled separately since eaclass includes EAJL_2)
+		getitem 2301, 1; // Cotton Shirt [1]
+		getitem 2403, 1; // Shoes [1]
+		getitem 1208, 1; // Main Gauche [4]
+		getitem 2628, 1; // Novice Armlet [1]
+		getitem 503, 5;  // Yellow Potion x5
+	} else if (.@eac & EAJL_2) {
+		// Second Class & Transcendent Second Class
+		getitem 2608, 1; // Rosary [0] / Glove [1]
+		getitem 505, 10; // Blue Potion x10
+		if (BaseJob != Job_Knight)
+			getitem 2405, 1; // Boots [0] (Knight/Lord Knight receives Boots [1] below)
+
+		announce strcharinfo(0) + " has advanced to Second Job as a " + jobname(Class) + "!", bc_all;
+
+		switch (BaseJob) {
+			case Job_Knight:
+				getitem 1163, 1; // Claymore [0]
+				getitem 2311, 1; // Coat [1]
+				getitem 2406, 1; // Boots [1]
+				break;
+			case Job_Priest:
+				getitem 1522, 1; // Stunner [0]
+				getitem 2352, 1; // Holy Robe [1]
+				getitem 2615, 1; // Earring [1]
+				break;
+			case Job_Wizard:
+				getitem 1617, 1; // Survivor's Rod [0]
+				getitem 2334, 1; // Mage Coat [1]
+				getitem 2616, 1; // Clip [1]
+				break;
+			case Job_Blacksmith:
+				getitem 1360, 1; // Two-Handed Axe [1]
+				getitem 2314, 1; // Chain Mail [1]
+				getitem 2628, 1; // Novice Armlet [1]
+				break;
+			case Job_Hunter:
+				getitem 1718, 1; // Hunter Bow [0]
+				getitem 2353, 1; // Odin's Blessing [1]
+				getitem 2607, 1; // Clip [0]
+				getitem 1750, 500; // Arrow x500
+				break;
+			case Job_Assassin:
+				getitem 1254, 1; // Jamadhar [0]
+				getitem 2309, 1; // Manteau [1]
+				getitem 2607, 1; // Clip [0]
+				break;
+			case Job_Crusader:
+				getitem 1410, 1; // Lance [0]
+				getitem 2311, 1; // Coat [1]
+				getitem 2105, 1; // Shield [1]
+				break;
+			case Job_Monk:
+				getitem 1807, 1; // Fist [0]
+				getitem 2325, 1; // Saint's Robe [1]
+				getitem 2608, 1; // Glove [1]
+				break;
+			case Job_Sage:
+				getitem 1550, 1; // Book [3]
+				getitem 2334, 1; // Mage Coat [1]
+				getitem 2616, 1; // Clip [1]
+				break;
+			case Job_Rogue:
+				getitem 1222, 1; // Damascus [1]
+				getitem 2309, 1; // Manteau [1]
+				getitem 2607, 1; // Clip [0]
+				break;
+			case Job_Alchemist:
+				getitem 1126, 1; // Saber [2]
+				getitem 2330, 1; // Formal Suit [1]
+				getitem 2628, 1; // Novice Armlet [1]
+				break;
+			case Job_Bard:
+				getitem 1907, 1; // Guitar [0]
+				getitem 2337, 1; // Meteo Plate [1]
+				getitem 2607, 1; // Clip [0]
+				getitem 1750, 500; // Arrow x500
+				break;
+			case Job_Dancer:
+				getitem 1960, 1; // Whip [1]
+				getitem 2337, 1; // Meteo Plate [1]
+				getitem 2616, 1; // Clip [1]
+				getitem 1750, 500; // Arrow x500
+				break;
+			case Job_Star_Gladiator:
+				getitem 1550, 1; // Book [3]
+				getitem 2337, 1; // Meteo Plate [1]
+				getitem 2607, 1; // Clip [0]
+				break;
+			case Job_Soul_Linker:
+				getitem 1617, 1; // Survivor's Rod [0]
+				getitem 2334, 1; // Mage Coat [1]
+				getitem 2616, 1; // Clip [1]
+				break;
+		}
+	} else {
+		// First Class, Pre-Re Extended 1st Class, or Baby Novice
+		getitem 2301, 1; // Cotton Shirt [1]
+		getitem 2403, 1; // Shoes [1]
+		getitem 503, 5;  // Yellow Potion x5
+
+		switch (BaseClass) {
+			case Job_Swordman:
+				getitem 1108, 1; // Blade [4]
+				getitem 2103, 1; // Buckler [0]
+				getitem 2628, 1; // Novice Armlet [1]
+				break;
+			case Job_Mage:
+				getitem 1602, 1; // Rod [4]
+				getitem 2616, 1; // Clip [1]
+				break;
+			case Job_Archer:
+				getitem 1705, 1; // Composite Bow [4]
+				getitem 2607, 1; // Clip [0]
+				getitem 1750, 500; // Arrow x500
+				break;
+			case Job_Acolyte:
+				getitem 1505, 1; // Mace [4]
+				getitem 2615, 1; // Earring [1]
+				break;
+			case Job_Merchant:
+				getitem 1302, 1; // Axe [4]
+				getitem 2628, 1; // Novice Armlet [1]
+				break;
+			case Job_Thief:
+				getitem 1208, 1; // Main Gauche [4]
+				getitem 2607, 1; // Clip [0]
+				break;
+			case Job_Gunslinger:
+				getitem 13101, 1; // Six Shooter [2]
+				getitem 2607, 1;  // Clip [0]
+				getitem 13200, 500; // Bullet x500
+				break;
+			case Job_Ninja:
+				getitem 13010, 1; // Asura [2]
+				getitem 2607, 1;  // Clip [0]
+				getitem 13250, 500; // Shuriken x500
+				break;
+			case Job_Taekwon:
+				getitem 1807, 1; // Fist [0]
+				getitem 2628, 1; // Novice Armlet [1]
+				break;
+		}
+	}
+	return;
+}
+
+//============================================================
+// Main NPC Execution
+//============================================================
+	mes .NPCName$;
+	Check_Riding();
+	Check_SkillPoints();
+
+	.@eac = eaclass();
+	.@first_eac = .@eac & EAJ_BASEMASK;
+	.@second_eac = .@eac & EAJ_UPPERMASK;
+
+	// 1. Check Rebirth Eligibility (2nd Class -> Novice High)
+	if (Can_Rebirth()) {
+		Require_Level(.Req_Rebirth[0], .Req_Rebirth[1]);
+		Job_Options(.@job_opt, Job_Novice_High);
+	}
+
+	// 2. Check Novice / Novice High / Baby Novice -> 1st Class
+	if (.@first_eac == EAJ_NOVICE && .@second_eac != EAJ_SUPER_NOVICE) {
+		Require_Level(.Req_First[0], .Req_First[1]);
+		switch (Class) {
+			case Job_Novice:
+				Job_Options(.@job_opt,
+					Job_Swordman, Job_Mage, Job_Archer,
+					Job_Acolyte, Job_Merchant, Job_Thief,
+					Job_Super_Novice, Job_Taekwon, Job_Gunslinger, Job_Ninja);
+				if (.BabyNovice && .BabyClass)
+					Job_Options(.@job_opt, Job_Baby);
+				break;
+
+			case Job_Novice_High:
+				if (.LastJob && lastJob)
+					Job_Options(.@job_opt, roclass((eaclass(lastJob) & EAJ_BASEMASK) | EAJL_UPPER));
+				else
+					Job_Options(.@job_opt,
+						Job_Swordman_High, Job_Mage_High, Job_Archer_High,
+						Job_Acolyte_High, Job_Merchant_High, Job_Thief_High);
+				break;
+
+			case Job_Baby:
+				if (!.BabyClass)
+					break;
+				Job_Options(.@job_opt,
+					Job_Baby_Swordman, Job_Baby_Mage, Job_Baby_Archer,
+					Job_Baby_Acolyte, Job_Baby_Merchant, Job_Baby_Thief,
+					Job_Super_Baby);
+				break;
+
+			default:
+				mes "An error has occurred.";
+				close;
+		}
+	}
+	// 3. Check 1st Class (Normal, Transcendent, Baby, Taekwon) -> 2nd Class
+	else if (Is_First_Cls(.@eac) ||
+	         Is_First_Cls(.@eac & ~EAJL_UPPER) ||
+	         (.BabyClass && Is_First_Cls(.@eac & ~EAJL_BABY))) {
+		.@class1 = roclass(.@eac | EAJL_2_1);
+		.@class2 = roclass(.@eac | EAJL_2_2);
+
+		if (.LastJob && lastJob && (.@eac & EAJL_UPPER)) {
+			// Enforce linear Transcendent 2nd job path
+			Require_Level(.Req_Second[0], .Req_Second[1]);
+			Job_Options(.@job_opt, roclass((eaclass(lastJob) & EAJ_UPPERMASK) | EAJL_UPPER));
+		} else {
+			if (.@class1 > 0) {
+				Require_Level(.Req_Second[0], .Req_Second[1]);
+				Job_Options(.@job_opt, .@class1);
+			}
+			if (.@class2 > 0) {
+				Require_Level(.Req_Second[0], .Req_Second[1]);
+				Job_Options(.@job_opt, .@class2);
+			}
+		}
+	}
+
+	Job_Menu(.@job_opt);
+	close;
+
+OnInit:
+	.NPCName$ = "[Job Master]";
+
+	// Pre-Renewal Class Toggles
+	.RebirthClass = true;    // Enable Rebirth / Transcendent 2nd classes?
+	.BabyNovice = true;      // Allow Novice to turn into Baby Novice directly?
+	.BabyClass = true;       // Enable Baby 1st, Baby 2nd, and Super Baby classes?
+	.LastJob = true;         // Enforce linear class progression after Rebirth?
+	.SkillPointCheck = true; // Require all skill points to be spent before job changing?
+	.Platinum = true;        // Automatically grant Platinum (quest) skills on job change?
+	.GetJobEquip = true;     // Grant starter equipment and consumables on job change?
+
+	// Level Requirements {BaseLevel, JobLevel}
+	setarray .Req_First[0], 1, 10;    // Novice -> 1st Class
+	setarray .Req_Second[0], 1, 40;   // 1st Class -> 2nd Class (change 40 to 50 if you want max job required)
+	setarray .Req_Rebirth[0], 99, 50; // 2nd Class -> Rebirth (change 99 to 255 if max base level is required)
+	.SNovice = 45;                    // Minimum Base Level for Super Novice / Super Baby
+	end;
+}
